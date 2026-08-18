@@ -82,6 +82,7 @@ input:disabled,textarea:disabled,select:disabled{background:var(--gray4);color:v
 .note.warnbox{border-left-color:var(--orange2);background:#FDF2F0;color:#8B2500}
 .note.okbox{border-left-color:#2E7D32;background:#E8F5EC;color:var(--green)}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:1.5rem;background:var(--gray1);color:#fff;font-size:13px;font-weight:600;padding:.7rem 1.25rem;border-radius:var(--radius);box-shadow:var(--shadow);z-index:200;opacity:0;pointer-events:none;transition:opacity .2s}
+#watermark{position:fixed;inset:0;z-index:300;pointer-events:none;background-repeat:repeat;mix-blend-mode:multiply}
 .toast.show{opacity:1}
 
 /* ── OBSERVATION ROWS ───────────────────────────────── */
@@ -241,6 +242,7 @@ footer{background:var(--gray1);padding:.75rem 1.5rem;display:flex;justify-conten
 </div>
 
 <div class="toast" id="toast"></div>
+<div id="watermark" aria-hidden="true"></div>
 
 <script>
 /* ═══════════════════════════════════════════════════════════════
@@ -347,7 +349,7 @@ function blankState() {
       };
     }),
     overall: {rating:'', ratingClass:'', strongest:'', gap:'', readiness:''},
-    integrity: {paste:0, copy:0, blur:0, expired:[]},
+    integrity: {paste:0, copy:0, blur:0, screenshot:0, expired:[]},
     lockedIdx: -1
   };
 }
@@ -429,7 +431,7 @@ function viewSetup() {
   h += '</div>';
 
   h += '<div class="card">';
-  h += '<div class="step-head"><span class="step-num">2</span>How this sheet works</div>';
+  h += '<div class="step-head"><span class="step-num">2</span>How this console works</div>';
   h += '<div class="note warnbox"><strong>This is a timed exercise.</strong> Each section opens with its own countdown. '
     +  'When the countdown reaches zero the section locks automatically and you move to the next one &mdash; '
     +  'you cannot return to a section once it closes. Write continuously and do not stop to look things up.</div>';
@@ -440,6 +442,7 @@ function viewSetup() {
   h += '<li><strong>Separate observation from inference</strong> &mdash; the observation box and the inference box serve different purposes. Do not mix them.</li>';
   h += '<li><strong>Use the competency framework</strong> &mdash; map each observation to the correct competency and element. Do not create your own labels.</li>';
   h += '<li><strong>Record both positive and developmental evidence</strong> &mdash; if you only record strengths your observations are incomplete.</li>';
+  h += '<li>This screen is watermarked with your name and the time throughout &mdash; copying, pasting and right-click are disabled, and screenshots are traceable to your session.</li>';
   h += '<li>Scores use the nine allowed values only: 1 / 1.5 / 2 / 2.5 / 3 / 3.5 / 4 / 4.5 / 5.</li>';
   h += '<li>Classification must be one of the four bands in the scoring grid.</li>';
   h += '</ol>';
@@ -721,6 +724,7 @@ function viewDone() {
   h += '<div class="muted">Sections closed by the timer: <strong>'+(S.integrity.expired.length || 0)+'</strong> &nbsp;&middot;&nbsp; '
     +  'Paste attempts blocked: <strong>'+S.integrity.paste+'</strong> &nbsp;&middot;&nbsp; '
     +  'Copy attempts blocked: <strong>'+(S.integrity.copy||0)+'</strong> &nbsp;&middot;&nbsp; '
+    +  'Screenshot key presses detected: <strong>'+(S.integrity.screenshot||0)+'</strong> &nbsp;&middot;&nbsp; '
     +  'Times the window lost focus: <strong>'+S.integrity.blur+'</strong></div>';
   h += '</div>';
   return h;
@@ -772,6 +776,7 @@ function bind(sec) {
       const btn = $('btn-begin'), hint = $('begin-hint');
       if (btn) btn.disabled = !has;
       if (hint) hint.textContent = has ? 'Section timers start once you click.' : 'Enter your name above to continue.';
+      paintWatermark();
     });
     on('f-date','input',function(e){ S.date = e.target.value; save(); });
     on('btn-begin','click', beginSheet);
@@ -951,6 +956,17 @@ document.addEventListener('cut', function(e){
 document.addEventListener('contextmenu', function(e){
   e.preventDefault();
 }, true);
+/* Best-effort only: PrintScreen fires a key event in some Windows browser
+   builds, but nothing in the web platform can see or block OS-level screen
+   capture (Snipping Tool, PrtScn, macOS Cmd+Shift+3/4/5, or a phone camera).
+   This just logs an attempt and nudges the assessor — see the watermark
+   below for the actual deterrent, which works regardless of capture method. */
+document.addEventListener('keyup', function(e){
+  if (e.key === 'PrintScreen' || e.keyCode === 44) {
+    S.integrity.screenshot = (S.integrity.screenshot||0) + 1; save();
+    toast('This screen is watermarked with your name and the time', 3000);
+  }
+});
 document.addEventListener('visibilitychange', function(){
   if (document.hidden && S.idx > 0 && S.idx < SECTIONS.length-1) { S.integrity.blur++; save(); }
 });
@@ -1045,6 +1061,8 @@ function sheetLines() {
   L.push('SESSION RECORD (generated automatically)');
   L.push('Sections closed by the timer: ' + S.integrity.expired.length + (S.integrity.expired.length ? ' (' + S.integrity.expired.join(', ') + ')' : ''));
   L.push('Paste attempts blocked: ' + S.integrity.paste);
+  L.push('Copy attempts blocked: ' + (S.integrity.copy||0));
+  L.push('Screenshot key presses detected: ' + (S.integrity.screenshot||0));
   L.push('Times the window lost focus: ' + S.integrity.blur);
   return L;
 }
@@ -1104,6 +1122,21 @@ function downloadPdf() {
   toast('PDF downloaded — send it to your administrator', 3200);
 }
 
+/* ═══ WATERMARK ══════════════════════════════════════════════
+   Cannot block screen capture — no web page can, on any OS or
+   browser. This makes any screenshot traceable back to the
+   assessor and the exact minute it was taken. */
+function paintWatermark() {
+  const who = (S.name || 'AIVA Assessment Simulation').trim();
+  const stamp = new Date().toLocaleString('en-GB', {day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'});
+  const label = who + '  ·  ' + stamp;
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="440" height="280">'
+    + '<text x="-20" y="150" transform="rotate(-30 200 140)" font-family="DM Sans, Arial, sans-serif" font-size="15" fill="rgba(40,42,50,0.075)">'
+    + esc(label) + '</text></svg>';
+  $('watermark').style.backgroundImage = 'url("data:image/svg+xml,' + encodeURIComponent(svg) + '")';
+}
+setInterval(paintWatermark, 60000);
+
 /* ═══ BOOT ═══════════════════════════════════════════════════ */
 $('fw-close').addEventListener('click', function(){ $('fw-modal').classList.remove('show'); });
 $('fw-modal').addEventListener('click', function(e){ if (e.target === $('fw-modal')) $('fw-modal').classList.remove('show'); });
@@ -1125,6 +1158,7 @@ if (restored && S.idx > 0 && S.idx < SECTIONS.length - 1) {
 } else {
   render();
 }
+paintWatermark();
 </script>
 </body>
 </html>
