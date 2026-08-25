@@ -81,6 +81,8 @@ input:disabled,textarea:disabled,select:disabled{background:var(--gray4);color:v
 .note{border-left:3px solid var(--blue1);background:#EDF3FA;padding:.75rem 1rem;font-size:13px;color:var(--gray1);border-radius:0 var(--radius) var(--radius) 0;margin-bottom:1rem}
 .note.warnbox{border-left-color:var(--orange2);background:#FDF2F0;color:#8B2500}
 .note.okbox{border-left-color:#2E7D32;background:#E8F5EC;color:var(--green)}
+.audio-bar{height:6px;background:var(--gray4);border-radius:3px;overflow:hidden}
+.audio-bar-fill{height:100%;width:0%;background:var(--blue1);transition:width .2s linear}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:1.5rem;background:var(--gray1);color:#fff;font-size:13px;font-weight:600;padding:.7rem 1.25rem;border-radius:var(--radius);box-shadow:var(--shadow);z-index:200;opacity:0;pointer-events:none;transition:opacity .2s}
 #watermark{position:fixed;inset:0;z-index:300;pointer-events:none;background-repeat:repeat;mix-blend-mode:multiply}
 .toast.show{opacity:1}
@@ -252,13 +254,16 @@ footer{background:var(--gray1);padding:.75rem 1.5rem;display:flex;justify-conten
 /* ═══════════════════════════════════════════════════════════════
    CONFIGURATION — section time limits (in seconds)
    Adjust these values to change how long each section stays open.
-   Total below = 19 minutes of timed writing.
+   Total below = 24 minutes of timed writing (5 of it starting only
+   once the role play audio finishes playing).
    ═══════════════════════════════════════════════════════════════ */
 const TIMING = {
+  listeningNotes: 300, // 5:00 — starts once the role play audio ends, not on section entry
   competency: 210,   // 3:30 per competency  x4 = 14:00
   summary:    120,   // 2:00
   overall:    180    // 3:00
 };
+const AUDIO_SRC = 'audio/role-play.mp3';
 const HARD_LOCK = true;   // true = section locks and auto-advances when time expires
 const BLOCK_PASTE = true; // true = pasting into the sheet is blocked
 
@@ -329,7 +334,7 @@ const STORE_KEY = 'aiva-assessment-sim-obshub-v1';
 /* ── SECTION MAP ─────────────────────────────────────────────── */
 const SECTIONS = [
   {id:'setup', title:'Before You Begin', kind:'setup', secs:0},
-  {id:'notes', title:'Listening Notes', kind:'notes', secs:0},
+  {id:'notes', title:'Listening Notes', kind:'notes', secs:TIMING.listeningNotes},
   {id:'c1', title:'Competency 1 — Result Orientation', kind:'comp', ci:0, secs:TIMING.competency},
   {id:'c2', title:'Competency 2 — Commercial Acumen', kind:'comp', ci:1, secs:TIMING.competency},
   {id:'c3', title:'Competency 3 — Customer Orientation', kind:'comp', ci:2, secs:TIMING.competency},
@@ -346,6 +351,7 @@ function blankState() {
     name: '', date: new Date().toISOString().slice(0,10),
     idx: 0, deadline: null, startedAt: null,
     notes: '',
+    audio: {started:false, ended:false},
     comps: COMPETENCIES.map(function(){
       return {
         obs: Array.from({length:OBS_ROWS}, function(){ return {text:'', element:'', type:''}; }),
@@ -440,7 +446,8 @@ function viewSetup() {
     +  'When the countdown reaches zero the section locks automatically and you move to the next one &mdash; '
     +  'you cannot return to a section once it closes. Write continuously and do not stop to look things up.</div>';
   h += '<ol class="muted" style="padding-left:1.25rem">';
-  h += '<li>Click Begin, then play the role play audio &mdash; use the untimed Listening Notes screen to capture rough notes as you go.</li>';
+  h += '<li>Click Begin, then play the role play audio on the Listening Notes screen &mdash; it can only be played <strong>once</strong>, so listen with full attention.</li>';
+  h += '<li>Once the audio ends you have <strong>5 minutes</strong> to finish your notes before this section closes automatically. You can continue sooner if you are ready.</li>';
   h += '<li>Your notes stay available from the <strong>My Notes</strong> button throughout the timed sections that follow.</li>';
   h += '<li><strong>Record what you observed</strong> &mdash; write what was actually SAID or DONE. Stay close to verbatim. Do not interpret in the observation box.</li>';
   h += '<li><strong>Separate observation from inference</strong> &mdash; the observation box and the inference box serve different purposes. Do not mix them.</li>';
@@ -495,20 +502,38 @@ function frameworkHTML() {
 
 /* ── LISTENING NOTES ─────────────────────────────────────────── */
 function viewNotes() {
+  const a = S.audio;
   let h = '';
   h += '<h1>Listening <span>Notes</span></h1>';
-  h += '<p class="sub">Play the role play audio now and use this space to capture rough notes as you listen.</p>';
+  h += '<p class="sub">Play the role play audio, then use this space to capture rough notes.</p>';
 
   h += '<div class="card">';
-  h += '<div class="note">This screen is untimed. Take as long as the audio runs. Your notes stay open for reference '
-    +  '(via the <strong>My Notes</strong> button) once you move into the timed sections &mdash; they are not scored on their own, '
-    +  'so write in whatever shorthand works for you: timestamps, exact phrases, numbers mentioned, anything you want to come back to.</div>';
+  h += '<div class="lbl">Role play audio</div>';
+  if (!a.ended) {
+    h += '<div class="note warnbox" style="margin-bottom:1rem"><strong>This audio can be played only once.</strong> '
+      +  'There is no pause-and-resume across a refresh, rewind, or replay once it ends &mdash; make sure you are ready to listen with full attention before you press play.</div>';
+    h += '<audio id="rp-audio" preload="metadata" src="' + esc(AUDIO_SRC) + '"></audio>';
+    h += '<button class="btn btn-primary" id="btn-audio-play">&#9654; Play role play audio</button>';
+    h += '<div id="audio-progress-row" style="display:none;margin-top:1rem">';
+    h += '<div class="audio-bar"><div class="audio-bar-fill" id="audio-progress-fill"></div></div>';
+    h += '<div class="tiny" style="margin-top:.5rem" id="audio-progress-text">Playing&hellip;</div>';
+    h += '</div>';
+  } else {
+    h += '<div class="note okbox"><strong>&#10003; Audio played.</strong> You have 5 minutes from when it ended to finish your notes below '
+      +  '&mdash; shown in the timer at the top of the page. You can continue sooner if you are ready.</div>';
+  }
+  h += '</div>';
+
+  h += '<div class="card">';
+  h += '<div class="lbl">Your notes</div>';
+  h += '<p class="muted" style="margin-bottom:.75rem">Write in whatever shorthand works for you &mdash; timestamps, exact phrases, numbers mentioned, anything you want to come back to. '
+    +  'These are not scored on their own and stay open for reference (via the <strong>My Notes</strong> button) once you move into the timed sections.</p>';
   h += '<textarea id="notes-main-ta" style="min-height:280px" placeholder="e.g. 0:40 — acknowledges price increases &amp; delays upfront. 3:10 — three root causes: monsoon, stretched team, oversight gap…">'+esc(S.notes)+'</textarea>';
   h += '</div>';
 
   h += '<div class="btn-row no-print">';
-  h += '<button class="btn btn-primary" id="btn-notes-continue">Continue to Competency 1 &rarr;</button>';
-  h += '<span class="tiny">Section timers begin on the next screen.</span>';
+  h += '<button class="btn btn-primary" id="btn-notes-continue"' + (a.ended ? '' : ' disabled') + '>Continue to Competency 1 &rarr;</button>';
+  h += '<span class="tiny">' + (a.ended ? 'Section timers begin on the next screen.' : 'Play the audio above to unlock this button.') + '</span>';
   h += '</div>';
   return h;
 }
@@ -794,6 +819,28 @@ function bind(sec) {
         advance(false);
       });
     });
+    const audioEl = $('rp-audio');
+    if (audioEl) {
+      on('btn-audio-play','click', function(){
+        if (S.audio.started) return;
+        S.audio.started = true; save();
+        $('btn-audio-play').style.display = 'none';
+        $('audio-progress-row').style.display = 'block';
+        audioEl.play().catch(function(){ toast('Could not start audio playback — check your browser sound settings', 3200); });
+      });
+      audioEl.addEventListener('timeupdate', function(){
+        if (!audioEl.duration) return;
+        const pct = Math.min(100, (audioEl.currentTime/audioEl.duration)*100);
+        const fill = $('audio-progress-fill'); if (fill) fill.style.width = pct + '%';
+        const txt = $('audio-progress-text'); if (txt) txt.textContent = mmss(audioEl.currentTime) + ' / ' + mmss(audioEl.duration);
+      });
+      audioEl.addEventListener('ended', function(){
+        S.audio.ended = true;
+        if (!S.deadline) S.deadline = Date.now() + TIMING.listeningNotes*1000;
+        save();
+        render();
+      });
+    }
     return;
   }
   if (sec.kind === 'done') {
@@ -861,7 +908,17 @@ function beginSheet() {
 function startSection(idx, resuming) {
   S.idx = idx;
   const sec = SECTIONS[idx];
-  if (sec.secs > 0) {
+  if (sec.kind === 'notes') {
+    // The 5-minute countdown starts only once the audio finishes playing
+    // (see the 'ended' handler) — not on entering this section.
+    if (S.audio.started && !S.audio.ended) {
+      // Playback was interrupted (e.g. by a refresh). The audio only plays
+      // once, so treat it as finished rather than stranding the assessor
+      // with no way to ever unlock the next section.
+      S.audio.ended = true;
+      if (!S.deadline) S.deadline = Date.now() + TIMING.listeningNotes*1000;
+    }
+  } else if (sec.secs > 0) {
     if (!resuming || !S.deadline) S.deadline = Date.now() + sec.secs*1000;
   } else {
     S.deadline = null;
@@ -917,7 +974,7 @@ function paintClock(left, total) {
 function updateTimerBar() {
   const sec = cur();
   const bar = $('timerbar');
-  if (!sec || sec.secs === 0) { bar.classList.remove('show'); return; }
+  if (!sec || sec.secs === 0 || !S.deadline) { bar.classList.remove('show'); return; }
   bar.classList.add('show');
   $('tb-sec').textContent = sec.title;
   const pos = TIMED.indexOf(sec) + 1;
