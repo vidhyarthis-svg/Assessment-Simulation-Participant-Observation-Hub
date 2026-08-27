@@ -24,6 +24,9 @@ header{background:var(--gray1);padding:.75rem 1.5rem;display:flex;align-items:ce
 .hdr-sub{font-size:10px;color:rgba(255,255,255,.45);text-transform:uppercase;letter-spacing:.1em;margin-top:2px}
 .badge{background:var(--blue1);color:#fff;font-size:10px;font-weight:700;padding:.3rem .875rem;border-radius:2px;letter-spacing:.08em;text-transform:uppercase}
 
+/* ── NO-REFRESH BANNER ──────────────────────────────── */
+.norefresh-banner{position:sticky;top:0;z-index:70;background:#FDF2F0;border-bottom:2px solid var(--orange2);padding:.55rem 1.5rem;text-align:center;font-size:12px;font-weight:700;color:#8B2500;line-height:1.5}
+
 /* ── TIMER BAR ──────────────────────────────────────── */
 .timerbar{position:sticky;top:0;z-index:50;background:var(--surface);border-bottom:1px solid var(--border);box-shadow:0 2px 8px rgba(40,42,50,.06);display:none}
 .timerbar.show{display:block}
@@ -180,6 +183,8 @@ footer{background:var(--gray1);padding:.75rem 1.5rem;display:flex;justify-conten
   </div>
   <span class="badge" id="hdr-badge">Assessor</span>
 </header>
+
+<div class="norefresh-banner no-print">Do not refresh, close, or navigate away from this tab. Nothing is saved automatically &mdash; doing so will lose all of your responses.</div>
 
 <!-- ══ TIMER BAR ══════════════════════════════════════ -->
 <div class="timerbar" id="timerbar">
@@ -1354,6 +1359,18 @@ function testingReset() {
     location.reload();
   });
 }
+
+/* Keep the sticky timer bar stacked directly below the sticky no-refresh
+   banner rather than overlapping it. Measured in JS (not hardcoded) since
+   the banner's text wraps to extra lines on narrow screens. */
+function positionTimerbarBelowBanner() {
+  const banner = document.querySelector('.norefresh-banner');
+  const bar = $('timerbar');
+  if (banner && bar) bar.style.top = banner.offsetHeight + 'px';
+}
+window.addEventListener('resize', positionTimerbarBelowBanner);
+window.addEventListener('load', positionTimerbarBelowBanner);
+positionTimerbarBelowBanner();
 
 /* ═══ BOOT ═══════════════════════════════════════════════════ */
 $('btn-testing-reset').addEventListener('click', testingReset); // TESTING ONLY — remove with the footer button
