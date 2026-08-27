@@ -379,6 +379,16 @@ let audioPreloadPct = 0;
 let audioPositionTimer = null;
 
 function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch(e){} }
+// Debounced write for free-text fields — the in-memory S object is always
+// updated synchronously on every keystroke (so nothing is ever stale), only
+// the localStorage write itself is coalesced to avoid a disk write per
+// keystroke. Discrete actions (selections, locks, screen changes) call
+// save() directly and remain instant.
+let saveDebounceTimer = null;
+function debouncedSave() {
+  clearTimeout(saveDebounceTimer);
+  saveDebounceTimer = setTimeout(save, 400);
+}
 function load() {
   try {
     const raw = localStorage.getItem(STORE_KEY);
@@ -1018,16 +1028,16 @@ function bind(sec) {
       if (btn) btn.disabled = !has;
       if (hint) hint.textContent = has ? 'Section timers start once you click.' : 'Enter your name and access code above to continue.';
     }
-    on('f-first','input',function(e){ S.firstName = e.target.value; syncFullName(); save(); refreshBeginGate(); paintWatermark(); });
-    on('f-last','input',function(e){ S.lastName = e.target.value; syncFullName(); save(); refreshBeginGate(); paintWatermark(); });
-    on('f-code','input',function(e){ S.accessCode = e.target.value; save(); refreshBeginGate(); hideCodeError(); });
-    on('f-date','input',function(e){ S.date = e.target.value; save(); });
+    on('f-first','input',function(e){ S.firstName = e.target.value; syncFullName(); debouncedSave(); refreshBeginGate(); paintWatermark(); });
+    on('f-last','input',function(e){ S.lastName = e.target.value; syncFullName(); debouncedSave(); refreshBeginGate(); paintWatermark(); });
+    on('f-code','input',function(e){ S.accessCode = e.target.value; debouncedSave(); refreshBeginGate(); hideCodeError(); });
+    on('f-date','input',function(e){ S.date = e.target.value; debouncedSave(); });
     on('btn-begin','click', beginSheet);
     on('btn-resume-inline','click', function(){ render(); startSection(S.idx, true); });
     return;
   }
   if (sec.kind === 'notes') {
-    on('notes-main-ta','input', function(e){ S.notes = e.target.value; save(); });
+    on('notes-main-ta','input', function(e){ S.notes = e.target.value; debouncedSave(); });
     on('btn-notes-continue','click', function(){
       showConfirm('Continue to the timed sections?', 'Your notes stay available from the My Notes button. Once you continue, section timers begin and cannot be paused.', function(){
         advance(false);
@@ -1055,13 +1065,13 @@ function bind(sec) {
   if (sec.kind === 'comp') {
     const ci = sec.ci, d = S.comps[ci];
     d.obs.forEach(function(o, i){
-      on('o-'+ci+'-'+i+'-text','input', function(e){ o.text = e.target.value; save(); });
+      on('o-'+ci+'-'+i+'-text','input', function(e){ o.text = e.target.value; debouncedSave(); });
       on('o-'+ci+'-'+i+'-element','change', function(e){ o.element = e.target.value; save(); });
       on('o-'+ci+'-'+i+'-type','change', function(e){ o.type = e.target.value; save(); });
     });
-    on('c-inference','input', function(e){ d.inference = e.target.value; save(); });
-    on('c-just','input', function(e){ d.justification = e.target.value; save(); });
-    on('c-why','input', function(e){ d.why = e.target.value; save(); });
+    on('c-inference','input', function(e){ d.inference = e.target.value; debouncedSave(); });
+    on('c-just','input', function(e){ d.justification = e.target.value; debouncedSave(); });
+    on('c-why','input', function(e){ d.why = e.target.value; debouncedSave(); });
     on('c-class','change', function(e){ d.classification = e.target.value; save(); });
     document.querySelectorAll('input[name="score-'+ci+'"]').forEach(function(r){
       r.addEventListener('change', function(e){ d.score = e.target.value; save(); });
@@ -1075,7 +1085,7 @@ function bind(sec) {
 
   if (sec.kind === 'summary') {
     S.comps.forEach(function(d, i){
-      on('s-rat-'+i,'input', function(e){ d.rationale = e.target.value; save(); });
+      on('s-rat-'+i,'input', function(e){ d.rationale = e.target.value; debouncedSave(); });
     });
     on('ov-class','change', function(e){ S.overall.ratingClass = e.target.value; save(); });
     document.querySelectorAll('input[name="overall-score"]').forEach(function(r){
@@ -1084,9 +1094,9 @@ function bind(sec) {
   }
 
   if (sec.kind === 'overall') {
-    on('ov-strong','input', function(e){ S.overall.strongest = e.target.value; save(); });
-    on('ov-gap','input', function(e){ S.overall.gap = e.target.value; save(); });
-    on('ov-ready','input', function(e){ S.overall.readiness = e.target.value; save(); });
+    on('ov-strong','input', function(e){ S.overall.strongest = e.target.value; debouncedSave(); });
+    on('ov-gap','input', function(e){ S.overall.gap = e.target.value; debouncedSave(); });
+    on('ov-ready','input', function(e){ S.overall.readiness = e.target.value; debouncedSave(); });
   }
 
   if (isLocked()) lockInputs();
@@ -1461,7 +1471,7 @@ $('fw-close').addEventListener('click', function(){ $('fw-modal').classList.remo
 $('fw-modal').addEventListener('click', function(e){ if (e.target === $('fw-modal')) $('fw-modal').classList.remove('show'); });
 $('notes-close').addEventListener('click', function(){ $('notes-modal').classList.remove('show'); });
 $('notes-modal').addEventListener('click', function(e){ if (e.target === $('notes-modal')) $('notes-modal').classList.remove('show'); });
-$('notes-ta').addEventListener('input', function(e){ S.notes = e.target.value; save(); });
+$('notes-ta').addEventListener('input', function(e){ S.notes = e.target.value; debouncedSave(); });
 document.addEventListener('keydown', function(e){
   if (e.key === 'Escape') { $('fw-modal').classList.remove('show'); $('notes-modal').classList.remove('show'); }
 });
