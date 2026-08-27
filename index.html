@@ -181,7 +181,10 @@ footer{background:var(--gray1);padding:.75rem 1.5rem;display:flex;justify-conten
     <div class="hdr-title">AIVA Practice Alignment Programme</div>
     <div class="hdr-sub">Assessment Simulation &middot; Observation Hub</div>
   </div>
-  <span class="badge" id="hdr-badge">Assessor</span>
+  <div style="display:flex;align-items:center;gap:.5rem">
+    <span class="badge no-print" id="webcam-indicator" style="display:none;background:#2E7D32">&#128247; Capture on</span>
+    <span class="badge" id="hdr-badge">Assessor</span>
+  </div>
 </header>
 
 <div class="norefresh-banner no-print">Do not refresh, close, or navigate away from this tab. Nothing is saved automatically &mdash; doing so will lose all of your responses.</div>
@@ -272,6 +275,9 @@ const AUDIO_SRC = 'audio/role-play.mp3';
 const HARD_LOCK = true;   // true = section locks and auto-advances when time expires
 const BLOCK_PASTE = true; // true = pasting into the sheet is blocked
 
+const WEBCAM_INTERVAL_MS = 5 * 60 * 1000; // ~5 minutes between stills
+const WEBCAM_WIDTH = 320, WEBCAM_HEIGHT = 240; // 4:3, small enough to keep frames lightweight
+
 const COMPETENCIES = [
   {
     n: 1,
@@ -339,6 +345,7 @@ const STORE_KEY = 'aiva-assessment-sim-obshub-v1';
 /* ── SECTION MAP ─────────────────────────────────────────────── */
 const SECTIONS = [
   {id:'setup', title:'Before You Begin', kind:'setup', secs:0},
+  {id:'consent', title:'Webcam Capture', kind:'consent', secs:0},
   {id:'notes', title:'Listening Notes', kind:'notes', secs:TIMING.listeningNotes},
   {id:'c1', title:'Competency 1 — Result Orientation', kind:'comp', ci:0, secs:TIMING.competency},
   {id:'c2', title:'Competency 2 — Commercial Acumen', kind:'comp', ci:1, secs:TIMING.competency},
@@ -356,6 +363,7 @@ function blankState() {
     name: '', firstName: '', lastName: '', accessCode: '', date: new Date().toISOString().slice(0,10),
     idx: 0, deadline: null, startedAt: null,
     notes: '',
+    webcamConsent: false,
     audio: {started:false, ended:false, stalls:0, preloadRetries:0, forcedIncomplete:false, lastPosition:0},
     comps: COMPETENCIES.map(function(){
       return {
@@ -377,6 +385,15 @@ let audioBlobUrl = null;
 let audioPreloadState = 'idle'; // 'idle' | 'loading' | 'ready' | 'error'
 let audioPreloadPct = 0;
 let audioPositionTimer = null;
+
+/* Webcam capture state — session-only, not persisted. Frame data URLs can
+   be sizeable; keeping them out of localStorage avoids bloating/quota-ing
+   it, at the cost of losing already-captured frames on a refresh. Capture
+   re-arms automatically on resume if consent was previously given —
+   see the BOOT section. */
+let webcamFrames = []; // {dataUrl, timestamp}
+let webcamCaptureTimer = null;
+let webcamIndicatorOn = false; // only ever set true after a genuine first successful frame
 
 function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch(e){} }
 // Debounced write for free-text fields — the in-memory S object is always
@@ -469,6 +486,7 @@ function render() {
   const wrap = $('wrap');
   wrap.innerHTML = ({
     setup:   viewSetup,
+    consent: viewConsent,
     notes:   viewNotes,
     comp:    viewComp,
     summary: viewSummary,
@@ -563,6 +581,29 @@ function frameworkHTML() {
   BANDS.forEach(function(b){
     h += '<div class="band"><b>'+b[0]+'</b><b style="color:var(--blue1);font-size:10px">'+esc(b[1])+'</b>'+esc(b[2])+'</div>';
   });
+  h += '</div>';
+  return h;
+}
+
+/* ── WEBCAM CONSENT ──────────────────────────────────────────── */
+function viewConsent() {
+  let h = '';
+  h += '<h1>Webcam <span>Capture</span></h1>';
+  h += '<p class="sub">Optional — read this before you continue.</p>';
+
+  h += '<div class="card">';
+  h += '<div class="lbl">What this is</div>';
+  h += '<p class="muted" style="margin-bottom:.75rem">If you consent, this device\'s webcam will capture a single still image when you begin, and roughly every 5 minutes after that for the rest of the exercise. The camera opens only for the moment it takes to grab each still &mdash; it is not recorded continuously and there is no live video feed at any point.</p>';
+  h += '<p class="muted" style="margin-bottom:.75rem">Captured stills are embedded directly into the same submission PDF you download at the end, alongside your responses, so your administrator can see them as part of your submission. They are not uploaded anywhere else or sent to any other system.</p>';
+  h += '<p class="muted" style="margin-bottom:1rem">This is entirely optional. Declining, or not having a working camera, does not affect your ability to complete this exercise in any way.</p>';
+  h += '<div class="check-card">';
+  h += '<input type="checkbox" id="webcam-consent-check"' + (S.webcamConsent ? ' checked' : '') + '>';
+  h += '<label for="webcam-consent-check">I consent to periodic webcam stills being captured on this device and included in my submission.</label>';
+  h += '</div>';
+  h += '</div>';
+
+  h += '<div class="btn-row no-print">';
+  h += '<button class="btn btn-primary" id="btn-consent-continue">Continue &rarr;</button>';
   h += '</div>';
   return h;
 }
@@ -747,6 +788,49 @@ function startPositionSaveTimer() {
 }
 function stopPositionSaveTimer() {
   if (audioPositionTimer) { clearInterval(audioPositionTimer); audioPositionTimer = null; }
+}
+
+/* ── WEBCAM CAPTURE ───────────────────────────────────────────────
+   Opens the camera only for the instant it takes to grab one frame,
+   then closes the stream immediately — periodic stills, not a live
+   feed. Entirely best-effort: any failure (denied, no camera, no
+   getUserMedia support) is silent and never blocks the exercise. The
+   header indicator only lights up after a genuine first successful
+   frame — never optimistically before the request resolves. ──────── */
+function armWebcamCapture() {
+  if (webcamCaptureTimer) return; // already armed this page load
+  captureWebcamFrame();
+  webcamCaptureTimer = setInterval(captureWebcamFrame, WEBCAM_INTERVAL_MS);
+}
+
+async function captureWebcamFrame() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+  let stream = null;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { width: WEBCAM_WIDTH, height: WEBCAM_HEIGHT } });
+    const video = document.createElement('video');
+    video.muted = true; video.playsInline = true;
+    video.srcObject = stream;
+    await video.play();
+    if (video.readyState < 2) {
+      await new Promise(function(resolve){ video.addEventListener('loadeddata', resolve, {once:true}); });
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = WEBCAM_WIDTH; canvas.height = WEBCAM_HEIGHT;
+    canvas.getContext('2d').drawImage(video, 0, 0, WEBCAM_WIDTH, WEBCAM_HEIGHT);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+    webcamFrames.push({ dataUrl: dataUrl, timestamp: Date.now() });
+    if (!webcamIndicatorOn) { webcamIndicatorOn = true; updateWebcamIndicator(); }
+  } catch (e) {
+    // Camera unavailable, denied, or busy — fail silently, try again next cycle.
+  } finally {
+    if (stream) stream.getTracks().forEach(function(t){ t.stop(); });
+  }
+}
+
+function updateWebcamIndicator() {
+  const el = $('webcam-indicator');
+  if (el) el.style.display = webcamIndicatorOn ? 'inline-flex' : 'none';
 }
 
 /* ── COMPETENCY SECTION ──────────────────────────────────────── */
@@ -978,6 +1062,9 @@ function viewDone() {
       +  (S.audio.forcedIncomplete ? ' &nbsp;&middot;&nbsp; <strong style="color:var(--orange2)">Audio forced complete after an unrecovered interruption — heard up to '+mmss(S.audio.lastPosition||0)+'</strong>' : '')
       +  '</div>';
   }
+  h += '<div class="muted" style="margin-top:.5rem">Webcam capture: <strong>'
+    +  (S.webcamConsent ? ('Consented — '+webcamFrames.length+' frame(s) captured this session') : 'Declined')
+    +  '</strong></div>';
   h += '</div>';
   return h;
 }
@@ -1034,6 +1121,15 @@ function bind(sec) {
     on('f-date','input',function(e){ S.date = e.target.value; debouncedSave(); });
     on('btn-begin','click', beginSheet);
     on('btn-resume-inline','click', function(){ render(); startSection(S.idx, true); });
+    return;
+  }
+  if (sec.kind === 'consent') {
+    on('btn-consent-continue','click', function(){
+      S.webcamConsent = !!$('webcam-consent-check').checked;
+      save();
+      if (S.webcamConsent) armWebcamCapture();
+      advance(false);
+    });
     return;
   }
   if (sec.kind === 'notes') {
@@ -1356,6 +1452,17 @@ function sheetLines(completedAt) {
   L.push('');
   L.push('Overall readiness assessment: ' + (S.overall.readiness.trim() || '(blank)'));
 
+  if (S.webcamConsent) {
+    L.push('');
+    L.push('');
+    L.push('WEBCAM CAPTURES');
+    if (webcamFrames.length === 0) {
+      L.push('Webcam consent was given, but no frames were successfully captured during this session.');
+    } else {
+      L.push('WEBCAM_IMAGES_MARKER');
+    }
+  }
+
   L.push('');
   L.push('');
   L.push('SESSION RECORD (generated automatically)');
@@ -1369,6 +1476,7 @@ function sheetLines(completedAt) {
   if (S.audio.forcedIncomplete) {
     L.push('Audio forced complete after an unrecovered interruption — heard up to ' + mmss(S.audio.lastPosition||0));
   }
+  L.push('Webcam capture: ' + (S.webcamConsent ? ('consented — ' + webcamFrames.length + ' frame(s) captured this session') : 'declined'));
   return L;
 }
 
@@ -1416,11 +1524,28 @@ function downloadPdf() {
       y += 14;
     });
   }
+  function drawWebcamGrid() {
+    const cols = 3, gutter = 10;
+    const imgW = (maxW - (cols-1)*gutter) / cols;
+    const imgH = imgW * (WEBCAM_HEIGHT / WEBCAM_WIDTH);
+    let col = 0;
+    webcamFrames.forEach(function(f){
+      if (col === 0) ensureRoom(imgH + 16);
+      const x = marginX + col*(imgW+gutter);
+      try { doc.addImage(f.dataUrl, 'JPEG', x, y, imgW, imgH); } catch(e){}
+      doc.setFont('helvetica','normal'); doc.setFontSize(7); doc.setTextColor(120,122,128);
+      doc.text(formatCompletedTimestamp(new Date(f.timestamp)), x, y + imgH + 9);
+      col++;
+      if (col === cols) { col = 0; y += imgH + 18; }
+    });
+    if (col !== 0) y += imgH + 18;
+  }
 
   sheetLines(completedAt).forEach(function(t){
     if (t === '') { y += 8; return; }
     if (t === 'OBSERVATION HUB') { writeTitle(t); return; }
-    if (/^(LISTENING NOTES|COMPETENCY \d|SUMMARY —|OVERALL OBSERVATIONS|SESSION RECORD)/.test(t)) { writeHeading(t); return; }
+    if (/^(LISTENING NOTES|COMPETENCY \d|SUMMARY —|OVERALL OBSERVATIONS|SESSION RECORD|WEBCAM CAPTURES)/.test(t)) { writeHeading(t); return; }
+    if (t === 'WEBCAM_IMAGES_MARKER') { drawWebcamGrid(); return; }
     writeBody(t);
   });
 
@@ -1488,6 +1613,7 @@ if (restored && S.idx > 0 && S.idx < SECTIONS.length - 1) {
   render();
 }
 paintWatermark();
+if (S.webcamConsent) armWebcamCapture(); // re-arm on resume; webcamConsent persists, webcamFrames does not
 </script>
 </body>
 </html>
