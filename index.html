@@ -182,7 +182,7 @@ footer{background:var(--gray1);padding:.75rem 1.5rem;display:flex;justify-conten
     <div class="hdr-sub">Assessment Simulation &middot; Observation Hub</div>
   </div>
   <div style="display:flex;align-items:center;gap:.5rem">
-    <span class="badge no-print" id="webcam-indicator" style="display:none;background:#2E7D32">&#128247; Capture on</span>
+    <span class="badge no-print" id="webcam-indicator" style="display:none;background:#2E7D32">&#128247; Capture armed</span>
     <span class="badge" id="hdr-badge">Assessor</span>
   </div>
 </header>
@@ -271,7 +271,14 @@ const AUDIO_SRC = 'audio/role-play.mp3';
 const HARD_LOCK = true;   // true = section locks and auto-advances when time expires
 const BLOCK_PASTE = true; // true = pasting into the sheet is blocked
 
-const WEBCAM_INTERVAL_MS = 5 * 60 * 1000; // ~5 minutes between stills
+// Randomized, not fixed — a predictable exact-5-minute cadence would let
+// someone time the camera. Each cycle picks a fresh random delay in this
+// range (averaging ~5 minutes) rather than reusing one fixed interval.
+const WEBCAM_INTERVAL_MIN_MS = 3 * 60 * 1000; // 3 minutes
+const WEBCAM_INTERVAL_MAX_MS = 7 * 60 * 1000; // 7 minutes
+function randomWebcamInterval() {
+  return WEBCAM_INTERVAL_MIN_MS + Math.random() * (WEBCAM_INTERVAL_MAX_MS - WEBCAM_INTERVAL_MIN_MS);
+}
 const WEBCAM_WIDTH = 320, WEBCAM_HEIGHT = 240; // 4:3, small enough to keep frames lightweight
 
 const COMPETENCIES = [
@@ -388,7 +395,8 @@ let audioPositionTimer = null;
    re-arms automatically on resume if consent was previously given —
    see the BOOT section. */
 let webcamFrames = []; // {dataUrl, timestamp}
-let webcamCaptureTimer = null;
+let webcamArmed = false; // true once armWebcamCapture() has started the capture chain this page load
+let webcamCaptureTimer = null; // current pending setTimeout id
 let webcamIndicatorOn = false; // only ever set true after a genuine first successful frame
 
 function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch(e){} }
@@ -590,7 +598,7 @@ function viewConsent() {
 
   h += '<div class="card">';
   h += '<div class="lbl">What this is</div>';
-  h += '<p class="muted" style="margin-bottom:.75rem">This device\'s webcam will capture a single still image now, and roughly every 5 minutes after that for the rest of the exercise. The camera opens only for the moment it takes to grab each still &mdash; it is not recorded continuously and there is no live video feed at any point.</p>';
+  h += '<p class="muted" style="margin-bottom:.75rem">This device\'s webcam will capture a single still image now, and then again at random intervals for the rest of the exercise. The camera opens only for the moment it takes to grab each still &mdash; it is not recorded continuously and there is no live video feed at any point.</p>';
   h += '<p class="muted" style="margin-bottom:.75rem">Captured stills are embedded directly into the same submission PDF you download at the end, alongside your responses, so your administrator can see them as part of your submission. They are not uploaded anywhere else or sent to any other system.</p>';
   h += '<div class="note warnbox" style="margin-bottom:1rem"><strong>Camera access is required.</strong> You must consent and have a working camera to continue with this exercise. If you do not have access to a working camera, contact your AIVA administrator before beginning.</div>';
   h += '<div class="check-card">';
@@ -796,15 +804,28 @@ function stopPositionSaveTimer() {
    Each capture still opens the camera only for the instant it takes
    to grab one frame, then closes the stream immediately — periodic
    stills throughout the exercise, not a continuously-held live feed.
+   Timing is a self-rescheduling setTimeout chain with a fresh random
+   delay each cycle (not setInterval on a fixed period) — a predictable
+   exact cadence would let someone time the camera and pose only then.
    Once past the consent screen, a later failed cycle (camera unplugged,
    permission revoked, busy) is logged but does not interrupt the
    exercise — only the initial verification blocks. The header
    indicator only lights up after a genuine first successful frame —
    never optimistically before the request resolves. ────────────── */
 function armWebcamCapture(skipImmediate) {
-  if (webcamCaptureTimer) return; // already armed this page load
-  if (!skipImmediate) captureWebcamFrame();
-  webcamCaptureTimer = setInterval(captureWebcamFrame, WEBCAM_INTERVAL_MS);
+  if (webcamArmed) return; // already armed this page load
+  webcamArmed = true;
+  if (skipImmediate) {
+    scheduleNextWebcamCapture();
+  } else {
+    captureWebcamFrame().then(scheduleNextWebcamCapture);
+  }
+}
+
+function scheduleNextWebcamCapture() {
+  webcamCaptureTimer = setTimeout(function(){
+    captureWebcamFrame().then(scheduleNextWebcamCapture);
+  }, randomWebcamInterval());
 }
 
 async function captureWebcamFrame() {
