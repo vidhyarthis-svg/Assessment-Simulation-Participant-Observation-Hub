@@ -351,7 +351,7 @@ function blankState() {
     name: '', date: new Date().toISOString().slice(0,10),
     idx: 0, deadline: null, startedAt: null,
     notes: '',
-    audio: {started:false, ended:false},
+    audio: {started:false, ended:false, stalls:0, preloadRetries:0, forcedIncomplete:false, lastPosition:0},
     comps: COMPETENCIES.map(function(){
       return {
         obs: Array.from({length:OBS_ROWS}, function(){ return {text:'', element:'', type:''}; }),
@@ -365,6 +365,13 @@ function blankState() {
 }
 let S = blankState();
 let restored = false;
+
+/* Audio preload state — session-only, not persisted (a blob: URL is only
+   ever valid for the lifetime of this page load). */
+let audioBlobUrl = null;
+let audioPreloadState = 'idle'; // 'idle' | 'loading' | 'ready' | 'error'
+let audioPreloadPct = 0;
+let audioPositionTimer = null;
 
 function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch(e){} }
 function load() {
@@ -511,17 +518,12 @@ function viewNotes() {
   h += '<div class="lbl">Role play audio</div>';
   if (!a.ended) {
     h += '<div class="note warnbox" style="margin-bottom:1rem"><strong>This audio can be played only once.</strong> '
-      +  'There is no pause-and-resume across a refresh, rewind, or replay once it ends &mdash; make sure you are ready to listen with full attention before you press play.</div>';
-    h += '<audio id="rp-audio" preload="metadata" src="' + esc(AUDIO_SRC) + '"></audio>';
-    h += '<button class="btn btn-primary" id="btn-audio-play">&#9654; Play role play audio</button>';
-    h += '<div id="audio-progress-row" style="display:none;margin-top:1rem">';
-    h += '<div class="audio-bar"><div class="audio-bar-fill" id="audio-progress-fill"></div></div>';
-    h += '<div class="tiny" style="margin-top:.5rem" id="audio-progress-text">Playing&hellip;</div>';
-    h += '</div>';
+      +  'There is no rewind or replay once it ends &mdash; make sure you are ready to listen with full attention before you press play.</div>';
   } else {
     h += '<div class="note okbox"><strong>&#10003; Audio played.</strong> You have 5 minutes from when it ended to finish your notes below '
       +  '&mdash; shown in the timer at the top of the page. You can continue sooner if you are ready.</div>';
   }
+  h += '<div id="audio-area"></div>';
   h += '</div>';
 
   h += '<div class="card">';
@@ -536,6 +538,155 @@ function viewNotes() {
   h += '<span class="tiny">' + (a.ended ? 'Section timers begin on the next screen.' : 'Play the audio above to unlock this button.') + '</span>';
   h += '</div>';
   return h;
+}
+
+/* ── AUDIO: full preload + stall recovery ─────────────────────────
+   The whole file is downloaded into memory (as a blob) before Play is
+   offered, so once playback starts it needs no network at all — a
+   connection drop afterward can't interrupt it. Preload itself retries
+   automatically if the network drops mid-download. As defence in depth,
+   playback also watches for stalls and resumes from the same position
+   rather than treating an interruption as "finished". ────────────── */
+async function preloadAudio() {
+  if (audioPreloadState === 'loading' || audioPreloadState === 'ready') return;
+  audioPreloadState = 'loading'; audioPreloadPct = 0;
+  paintAudioArea();
+  const ctrl = new AbortController();
+  let stallTimeoutId;
+  // Resets on every chunk received, so this only fires on a genuine stall
+  // (no data for 20s) — not a fixed budget that would punish slow connections.
+  function armStallTimeout() {
+    clearTimeout(stallTimeoutId);
+    stallTimeoutId = setTimeout(function(){ ctrl.abort(); }, 20000);
+  }
+  try {
+    armStallTimeout();
+    const resp = await fetch(AUDIO_SRC, {cache:'force-cache', signal: ctrl.signal});
+    if (!resp.ok || !resp.body) throw new Error('bad response');
+    const total = parseInt(resp.headers.get('Content-Length') || '0', 10);
+    const reader = resp.body.getReader();
+    const chunks = [];
+    let received = 0, lastPct = -1;
+    while (true) {
+      armStallTimeout();
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      received += value.length;
+      const pct = total ? Math.min(100, Math.round((received/total)*100)) : 0;
+      if (pct !== lastPct) { audioPreloadPct = pct; lastPct = pct; paintAudioArea(); }
+    }
+    clearTimeout(stallTimeoutId);
+    const blob = new Blob(chunks, {type:'audio/mpeg'});
+    audioBlobUrl = URL.createObjectURL(blob);
+    audioPreloadState = 'ready';
+    paintAudioArea();
+  } catch(e) {
+    clearTimeout(stallTimeoutId);
+    audioPreloadState = 'error';
+    S.audio.preloadRetries = (S.audio.preloadRetries||0) + 1; save();
+    paintAudioArea();
+  }
+}
+window.addEventListener('online', function(){
+  if (audioPreloadState === 'error') preloadAudio();
+});
+
+function paintAudioArea() {
+  const el = $('audio-area');
+  if (!el) return;
+  let h = '';
+  if (audioPreloadState === 'idle' || audioPreloadState === 'loading') {
+    h += '<div class="tiny" style="margin-bottom:.5rem">Preparing audio&hellip; downloading fully so playback keeps going even if your connection drops.</div>';
+    h += '<div class="audio-bar"><div class="audio-bar-fill" style="width:' + audioPreloadPct + '%"></div></div>';
+    h += '<div class="tiny" style="margin-top:.5rem">' + audioPreloadPct + '% downloaded</div>';
+  } else if (audioPreloadState === 'error') {
+    h += '<div class="note warnbox"><strong>Could not load the audio.</strong> Check your connection — this retries automatically once you are back online, or click below.</div>';
+    h += '<button class="btn btn-ghost" id="btn-audio-retry">Retry now</button>';
+  } else if (audioPreloadState === 'ready' && !S.audio.started) {
+    h += '<audio id="rp-audio" preload="auto" src="' + esc(audioBlobUrl) + '"></audio>';
+    h += '<button class="btn btn-primary" id="btn-audio-play">&#9654; Play role play audio</button>';
+  } else if (S.audio.started) {
+    h += '<audio id="rp-audio" preload="auto" src="' + esc(audioBlobUrl) + '"></audio>';
+    h += '<div class="audio-bar"><div class="audio-bar-fill" id="audio-progress-fill" style="width:0%"></div></div>';
+    h += '<div class="tiny" style="margin-top:.5rem" id="audio-progress-text">Playing&hellip;</div>';
+    h += '<div class="note warnbox" id="audio-stall-note" style="display:none;margin-top:.75rem">Connection interrupted &mdash; playback will resume automatically.</div>';
+  }
+  el.innerHTML = h;
+  on('btn-audio-retry','click', function(){ audioPreloadState = 'idle'; preloadAudio(); });
+  on('btn-audio-play','click', onAudioPlayClick);
+  wireAudioElement();
+}
+
+function wireAudioElement() {
+  const el = $('rp-audio');
+  if (!el) return;
+  el.addEventListener('timeupdate', function(){
+    if (!el.duration) return;
+    const pct = Math.min(100, (el.currentTime/el.duration)*100);
+    const fill = $('audio-progress-fill'); if (fill) fill.style.width = pct + '%';
+    const txt = $('audio-progress-text'); if (txt) txt.textContent = mmss(el.currentTime) + ' / ' + mmss(el.duration);
+  });
+  el.addEventListener('waiting', onAudioBuffering);
+  el.addEventListener('stalled', onAudioBuffering);
+  el.addEventListener('playing', function(){ const note = $('audio-stall-note'); if (note) note.style.display = 'none'; });
+  el.addEventListener('error', onAudioError);
+  el.addEventListener('ended', onAudioEnded);
+}
+
+function onAudioPlayClick() {
+  if (S.audio.started) return;
+  S.audio.started = true; save();
+  paintAudioArea(); // switches to the "started" view; nothing has played yet, so no progress to lose
+  const el = $('rp-audio');
+  if (el) el.play().catch(function(){ toast('Could not start audio playback — check your browser sound settings', 3200); });
+  startPositionSaveTimer();
+}
+
+function onAudioBuffering() {
+  const note = $('audio-stall-note');
+  if (note && note.style.display !== 'block') { S.audio.stalls = (S.audio.stalls||0) + 1; save(); }
+  if (note) { note.style.display = 'block'; note.textContent = 'Connection interrupted — playback will resume automatically.'; }
+}
+
+function onAudioError() {
+  const el = $('rp-audio');
+  if (el) S.audio.lastPosition = el.currentTime || S.audio.lastPosition;
+  save();
+  const note = $('audio-stall-note');
+  if (note) { note.style.display = 'block'; note.textContent = 'Connection lost — trying to resume from where you left off…'; }
+  setTimeout(attemptAudioResume, 1500);
+}
+function attemptAudioResume() {
+  if (S.audio.ended) return;
+  const el = $('rp-audio');
+  if (!el) return;
+  try {
+    el.load();
+    el.currentTime = S.audio.lastPosition || 0;
+    el.play().then(function(){
+      const note = $('audio-stall-note'); if (note) note.style.display = 'none';
+    }).catch(function(){ setTimeout(attemptAudioResume, 3000); });
+  } catch(e) { setTimeout(attemptAudioResume, 3000); }
+}
+
+function onAudioEnded() {
+  stopPositionSaveTimer();
+  S.audio.ended = true;
+  if (!S.deadline) S.deadline = Date.now() + TIMING.listeningNotes*1000;
+  save();
+  render();
+}
+
+function startPositionSaveTimer() {
+  stopPositionSaveTimer();
+  audioPositionTimer = setInterval(function(){
+    const el = $('rp-audio');
+    if (el && !isNaN(el.currentTime)) { S.audio.lastPosition = el.currentTime; save(); }
+  }, 4000);
+}
+function stopPositionSaveTimer() {
+  if (audioPositionTimer) { clearInterval(audioPositionTimer); audioPositionTimer = null; }
 }
 
 /* ── COMPETENCY SECTION ──────────────────────────────────────── */
@@ -755,6 +906,12 @@ function viewDone() {
     +  'Copy attempts blocked: <strong>'+(S.integrity.copy||0)+'</strong> &nbsp;&middot;&nbsp; '
     +  'Screenshot key presses detected: <strong>'+(S.integrity.screenshot||0)+'</strong> &nbsp;&middot;&nbsp; '
     +  'Times the window lost focus: <strong>'+S.integrity.blur+'</strong></div>';
+  if (S.audio.stalls || S.audio.preloadRetries || S.audio.forcedIncomplete) {
+    h += '<div class="muted" style="margin-top:.5rem">Audio buffering interruptions: <strong>'+(S.audio.stalls||0)+'</strong> &nbsp;&middot;&nbsp; '
+      +  'Audio load retries: <strong>'+(S.audio.preloadRetries||0)+'</strong>'
+      +  (S.audio.forcedIncomplete ? ' &nbsp;&middot;&nbsp; <strong style="color:var(--orange2)">Audio forced complete after an unrecovered interruption — heard up to '+mmss(S.audio.lastPosition||0)+'</strong>' : '')
+      +  '</div>';
+  }
   h += '</div>';
   return h;
 }
@@ -819,27 +976,9 @@ function bind(sec) {
         advance(false);
       });
     });
-    const audioEl = $('rp-audio');
-    if (audioEl) {
-      on('btn-audio-play','click', function(){
-        if (S.audio.started) return;
-        S.audio.started = true; save();
-        $('btn-audio-play').style.display = 'none';
-        $('audio-progress-row').style.display = 'block';
-        audioEl.play().catch(function(){ toast('Could not start audio playback — check your browser sound settings', 3200); });
-      });
-      audioEl.addEventListener('timeupdate', function(){
-        if (!audioEl.duration) return;
-        const pct = Math.min(100, (audioEl.currentTime/audioEl.duration)*100);
-        const fill = $('audio-progress-fill'); if (fill) fill.style.width = pct + '%';
-        const txt = $('audio-progress-text'); if (txt) txt.textContent = mmss(audioEl.currentTime) + ' / ' + mmss(audioEl.duration);
-      });
-      audioEl.addEventListener('ended', function(){
-        S.audio.ended = true;
-        if (!S.deadline) S.deadline = Date.now() + TIMING.listeningNotes*1000;
-        save();
-        render();
-      });
+    if (!S.audio.ended) {
+      paintAudioArea();
+      if (audioPreloadState === 'idle') preloadAudio();
     }
     return;
   }
@@ -912,10 +1051,13 @@ function startSection(idx, resuming) {
     // The 5-minute countdown starts only once the audio finishes playing
     // (see the 'ended' handler) — not on entering this section.
     if (S.audio.started && !S.audio.ended) {
-      // Playback was interrupted (e.g. by a refresh). The audio only plays
-      // once, so treat it as finished rather than stranding the assessor
-      // with no way to ever unlock the next section.
+      // Playback was interrupted (e.g. by a refresh) and never recovered
+      // via the in-page resume logic. The audio only plays once, so treat
+      // it as finished rather than stranding the assessor with no way to
+      // ever unlock the next section — but flag it as incomplete so the
+      // administrator can see this wasn't a full, uninterrupted listen.
       S.audio.ended = true;
+      S.audio.forcedIncomplete = true;
       if (!S.deadline) S.deadline = Date.now() + TIMING.listeningNotes*1000;
     }
   } else if (sec.secs > 0) {
@@ -1125,6 +1267,11 @@ function sheetLines() {
   L.push('Copy attempts blocked: ' + (S.integrity.copy||0));
   L.push('Screenshot key presses detected: ' + (S.integrity.screenshot||0));
   L.push('Times the window lost focus: ' + S.integrity.blur);
+  L.push('Audio buffering interruptions: ' + (S.audio.stalls||0));
+  L.push('Audio load retries: ' + (S.audio.preloadRetries||0));
+  if (S.audio.forcedIncomplete) {
+    L.push('Audio forced complete after an unrecovered interruption — heard up to ' + mmss(S.audio.lastPosition||0));
+  }
   return L;
 }
 
