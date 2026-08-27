@@ -531,7 +531,8 @@ function viewSetup() {
     +  'When the countdown reaches zero the section locks automatically and you move to the next one &mdash; '
     +  'you cannot return to a section once it closes. Write continuously and do not stop to look things up.</div>';
   h += '<ol class="muted" style="padding-left:1.25rem">';
-  h += '<li>Click Begin, then play the role play audio on the Listening Notes screen &mdash; it can only be played <strong>once</strong>, so listen with full attention.</li>';
+  h += '<li>Click Begin &mdash; you will be asked to allow <strong>webcam access</strong> next. This is required to proceed; make sure a working camera is available before you start.</li>';
+  h += '<li>Then play the role play audio on the Listening Notes screen &mdash; it can only be played <strong>once</strong>, so listen with full attention.</li>';
   h += '<li>Once the audio ends you have <strong>5 minutes</strong> to finish your notes before this section closes automatically. You can continue sooner if you are ready.</li>';
   h += '<li>Your notes stay available from the <strong>My Notes</strong> button throughout the timed sections that follow.</li>';
   h += '<li><strong>Record what you observed</strong> &mdash; write what was actually SAID or DONE. Stay close to verbatim. Do not interpret in the observation box.</li>';
@@ -589,21 +590,24 @@ function frameworkHTML() {
 function viewConsent() {
   let h = '';
   h += '<h1>Webcam <span>Capture</span></h1>';
-  h += '<p class="sub">Optional — read this before you continue.</p>';
+  h += '<p class="sub">Required before you continue.</p>';
 
   h += '<div class="card">';
   h += '<div class="lbl">What this is</div>';
-  h += '<p class="muted" style="margin-bottom:.75rem">If you consent, this device\'s webcam will capture a single still image when you begin, and roughly every 5 minutes after that for the rest of the exercise. The camera opens only for the moment it takes to grab each still &mdash; it is not recorded continuously and there is no live video feed at any point.</p>';
+  h += '<p class="muted" style="margin-bottom:.75rem">This device\'s webcam will capture a single still image now, and roughly every 5 minutes after that for the rest of the exercise. The camera opens only for the moment it takes to grab each still &mdash; it is not recorded continuously and there is no live video feed at any point.</p>';
   h += '<p class="muted" style="margin-bottom:.75rem">Captured stills are embedded directly into the same submission PDF you download at the end, alongside your responses, so your administrator can see them as part of your submission. They are not uploaded anywhere else or sent to any other system.</p>';
-  h += '<p class="muted" style="margin-bottom:1rem">This is entirely optional. Declining, or not having a working camera, does not affect your ability to complete this exercise in any way.</p>';
+  h += '<div class="note warnbox" style="margin-bottom:1rem"><strong>Camera access is required.</strong> You must consent and have a working camera to continue with this exercise. If you do not have access to a working camera, contact your AIVA administrator before beginning.</div>';
   h += '<div class="check-card">';
-  h += '<input type="checkbox" id="webcam-consent-check"' + (S.webcamConsent ? ' checked' : '') + '>';
+  h += '<input type="checkbox" id="webcam-consent-check">';
   h += '<label for="webcam-consent-check">I consent to periodic webcam stills being captured on this device and included in my submission.</label>';
   h += '</div>';
   h += '</div>';
 
+  h += '<div id="webcam-consent-status" style="display:none"></div>';
+
   h += '<div class="btn-row no-print">';
-  h += '<button class="btn btn-primary" id="btn-consent-continue">Continue &rarr;</button>';
+  h += '<button class="btn btn-primary" id="btn-consent-continue" disabled>Continue &rarr;</button>';
+  h += '<span class="tiny" id="consent-hint">Check the box above to continue.</span>';
   h += '</div>';
   return h;
 }
@@ -791,20 +795,24 @@ function stopPositionSaveTimer() {
 }
 
 /* ── WEBCAM CAPTURE ───────────────────────────────────────────────
-   Opens the camera only for the instant it takes to grab one frame,
-   then closes the stream immediately — periodic stills, not a live
-   feed. Entirely best-effort: any failure (denied, no camera, no
-   getUserMedia support) is silent and never blocks the exercise. The
-   header indicator only lights up after a genuine first successful
-   frame — never optimistically before the request resolves. ──────── */
-function armWebcamCapture() {
+   Camera access is mandatory — the consent screen blocks progress
+   until a frame is genuinely captured, not just on a checked box.
+   Each capture still opens the camera only for the instant it takes
+   to grab one frame, then closes the stream immediately — periodic
+   stills throughout the exercise, not a continuously-held live feed.
+   Once past the consent screen, a later failed cycle (camera unplugged,
+   permission revoked, busy) is logged but does not interrupt the
+   exercise — only the initial verification blocks. The header
+   indicator only lights up after a genuine first successful frame —
+   never optimistically before the request resolves. ────────────── */
+function armWebcamCapture(skipImmediate) {
   if (webcamCaptureTimer) return; // already armed this page load
-  captureWebcamFrame();
+  if (!skipImmediate) captureWebcamFrame();
   webcamCaptureTimer = setInterval(captureWebcamFrame, WEBCAM_INTERVAL_MS);
 }
 
 async function captureWebcamFrame() {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return false;
   let stream = null;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ video: { width: WEBCAM_WIDTH, height: WEBCAM_HEIGHT } });
@@ -821,8 +829,10 @@ async function captureWebcamFrame() {
     const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
     webcamFrames.push({ dataUrl: dataUrl, timestamp: Date.now() });
     if (!webcamIndicatorOn) { webcamIndicatorOn = true; updateWebcamIndicator(); }
+    return true;
   } catch (e) {
-    // Camera unavailable, denied, or busy — fail silently, try again next cycle.
+    // Camera unavailable, denied, or busy.
+    return false;
   } finally {
     if (stream) stream.getTracks().forEach(function(t){ t.stop(); });
   }
@@ -1124,11 +1134,30 @@ function bind(sec) {
     return;
   }
   if (sec.kind === 'consent') {
-    on('btn-consent-continue','click', function(){
-      S.webcamConsent = !!$('webcam-consent-check').checked;
-      save();
-      if (S.webcamConsent) armWebcamCapture();
-      advance(false);
+    on('webcam-consent-check','change', function(e){
+      $('btn-consent-continue').disabled = !e.target.checked;
+      $('consent-hint').textContent = e.target.checked ? 'Click Continue to verify camera access.' : 'Check the box above to continue.';
+    });
+    on('btn-consent-continue','click', async function(){
+      if (!$('webcam-consent-check').checked) return;
+      const btn = $('btn-consent-continue');
+      const check = $('webcam-consent-check');
+      const status = $('webcam-consent-status');
+      btn.disabled = true; check.disabled = true;
+      status.style.display = 'block';
+      status.className = 'note';
+      status.textContent = 'Checking camera access…';
+      const ok = await captureWebcamFrame();
+      if (ok) {
+        S.webcamConsent = true;
+        save();
+        armWebcamCapture(true); // skip the immediate capture — we just took it
+        advance(false);
+      } else {
+        btn.disabled = false; check.disabled = false;
+        status.className = 'note warnbox';
+        status.innerHTML = "<strong>Camera access failed.</strong> Check your browser's camera permissions (and that no other app is using the camera), then click Continue to try again.";
+      }
     });
     return;
   }
