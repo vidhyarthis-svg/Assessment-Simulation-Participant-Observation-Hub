@@ -211,11 +211,7 @@ footer{background:var(--gray1);padding:.75rem 1.5rem;display:flex;justify-conten
 
 <footer>
   <div class="ftr-l">AIVA Practice Alignment Programme</div>
-  <div style="display:flex;align-items:center;gap:1rem">
-    <!-- TESTING ONLY — delete this button (and its handler in the BOOT section) before go-live -->
-    <button id="btn-testing-reset" class="no-print" style="background:none;border:1px solid rgba(255,255,255,.25);color:rgba(255,255,255,.55);font-family:var(--font);font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:.3rem .625rem;border-radius:var(--radius);cursor:pointer">&#8635; Reset (testing only)</button>
-    <div class="ftr-r">Right Management India</div>
-  </div>
+  <div class="ftr-r">Right Management India</div>
 </footer>
 
 <!-- ══ FRAMEWORK MODAL ════════════════════════════════ -->
@@ -1597,16 +1593,6 @@ function paintWatermark() {
 }
 setInterval(paintWatermark, 60000);
 
-/* ═══ TESTING ONLY — delete this whole block, and the button in
-   the footer, before go-live. Clears the saved draft on this
-   device/browser and reloads to the first screen. ═══════════ */
-function testingReset() {
-  showConfirm('Reset this device\'s saved draft?', 'This clears the local test draft and reloads to the first screen. Only affects this browser — testing only.', function(){
-    try { localStorage.removeItem(STORE_KEY); } catch(e){}
-    location.reload();
-  });
-}
-
 /* Keep the sticky timer bar stacked directly below the sticky no-refresh
    banner rather than overlapping it. Measured in JS (not hardcoded) since
    the banner's text wraps to extra lines on narrow screens. */
@@ -1620,7 +1606,6 @@ window.addEventListener('load', positionTimerbarBelowBanner);
 positionTimerbarBelowBanner();
 
 /* ═══ BOOT ═══════════════════════════════════════════════════ */
-$('btn-testing-reset').addEventListener('click', testingReset); // TESTING ONLY — remove with the footer button
 $('fw-close').addEventListener('click', function(){ $('fw-modal').classList.remove('show'); });
 $('fw-modal').addEventListener('click', function(e){ if (e.target === $('fw-modal')) $('fw-modal').classList.remove('show'); });
 $('notes-close').addEventListener('click', function(){ $('notes-modal').classList.remove('show'); });
