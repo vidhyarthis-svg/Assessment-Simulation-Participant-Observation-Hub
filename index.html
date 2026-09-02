@@ -44,6 +44,10 @@ header{background:var(--gray1);padding:.75rem 1.5rem;display:flex;align-items:ce
 .dot{width:8px;height:8px;border-radius:50%;background:var(--border)}
 .dot.done{background:var(--blue1)}
 .dot.now{background:var(--gold);box-shadow:0 0 0 3px var(--gold-light)}
+.tb-links{max-width:900px;margin:0 auto;padding:0 1.5rem .625rem;display:none;gap:.5rem}
+.tb-links.show{display:flex}
+.tb-linkbtn{background:none;border:1px solid var(--border);color:var(--gray2);font-family:var(--font);font-size:11px;font-weight:600;padding:.3rem .7rem;border-radius:var(--radius);cursor:pointer;white-space:nowrap;transition:all .15s}
+.tb-linkbtn:hover{border-color:var(--blue1);color:var(--blue1)}
 .tb-prog{height:3px;background:var(--gray4)}
 .tb-prog-fill{height:100%;background:var(--blue1);transition:width .4s linear}
 .tb-prog-fill.warn{background:var(--orange2)}
@@ -203,6 +207,10 @@ footer{background:var(--gray1);padding:.75rem 1.5rem;display:flex;justify-conten
         <div class="clock-lbl">Time left</div>
       </div>
     </div>
+  </div>
+  <div class="tb-links" id="tb-links">
+    <button class="tb-linkbtn" id="tb-btn-fw">Framework</button>
+    <button class="tb-linkbtn" id="tb-btn-notes">My Notes</button>
   </div>
   <div class="tb-prog"><div class="tb-prog-fill" id="tb-fill" style="width:100%"></div></div>
 </div>
@@ -371,7 +379,7 @@ function blankState() {
     comps: COMPETENCIES.map(function(){
       return {
         obs: Array.from({length:OBS_ROWS}, function(){ return {text:'', element:'', type:''}; }),
-        inference:'', score:'', justification:'', classification:'', why:'', rationale:''
+        inference:'', score:'', justification:'', classification:''
       };
     }),
     overall: {rating:'', ratingClass:'', strongest:'', gap:'', readiness:''},
@@ -908,13 +916,11 @@ function viewComp(sec) {
     h += '<div class="band"><b>'+b[0]+'</b><b style="color:var(--blue1);font-size:10px">'+esc(b[1])+'</b></div>';
   });
   h += '</div>';
-  h += '<div class="field" style="margin-top:1.25rem"><label for="c-just">One sentence justifying your score &mdash; reference specific behaviour from your observations</label>';
-  h += '<textarea id="c-just" style="min-height:70px">'+esc(d.justification)+'</textarea></div>';
-  h += '<div class="field" style="margin-bottom:0"><label for="c-class">Classification &mdash; choose the band that matches your score</label>';
+  h += '<div class="field" style="margin-top:1.25rem;margin-bottom:0"><label for="c-class">Classification &mdash; choose the band that matches your score</label>';
   h += selectHTML('c-class', CLASSES, d.classification, 'Select classification');
   h += '</div>';
-  h += '<div class="field" style="margin-top:1rem;margin-bottom:0"><label for="c-why">Why &mdash; in one to two sentences, reference specific behaviour from your observations</label>';
-  h += '<textarea id="c-why" style="min-height:70px">'+esc(d.why)+'</textarea></div>';
+  h += '<div class="field" style="margin-top:1rem"><label for="c-just">Why &mdash; one to two sentences justifying your score and classification, referencing specific behaviour from your observations</label>';
+  h += '<textarea id="c-just" style="min-height:70px">'+esc(d.justification)+'</textarea></div>';
   h += '</div>';
 
   h += sectionFooter();
@@ -935,16 +941,15 @@ function selectHTML(id, opts, val, placeholder) {
 function viewSummary() {
   let h = '';
   h += '<h1>Summary <span>Scores &amp; Classifications</span></h1>';
-  h += '<p class="sub">Scores and classifications carry forward from the four competency sections. Add a one-line rationale for each, then set your overall rating.</p>';
+  h += '<p class="sub">Scores and classifications carry forward from the four competency sections. Review them, then set your overall rating.</p>';
   h += '<div class="card">';
-  h += '<table class="sumtable"><thead><tr><th>Competency</th><th style="text-align:center">Score</th><th>Classification</th><th>One-line rationale</th></tr></thead><tbody>';
+  h += '<table class="sumtable"><thead><tr><th>Competency</th><th style="text-align:center">Score</th><th>Classification</th></tr></thead><tbody>';
   COMPETENCIES.forEach(function(c, i){
     const d = S.comps[i];
     h += '<tr>';
     h += '<td class="comp">'+esc(c.name)+'</td>';
     h += '<td class="sc">'+(d.score ? esc(d.score) : '<span class="pending">—</span>')+'</td>';
     h += '<td class="cl">'+(d.classification ? esc(d.classification) : '<span class="pending">not recorded</span>')+'</td>';
-    h += '<td><textarea id="s-rat-'+i+'" style="min-height:56px" placeholder="One line">'+esc(d.rationale)+'</textarea></td>';
     h += '</tr>';
   });
   h += '</tbody></table>';
@@ -993,8 +998,6 @@ function sectionFooter() {
   const isLast = S.idx === SECTIONS.length - 2;
   let h = '<div class="btn-row no-print">';
   h += '<button class="btn btn-primary" id="btn-next">'+(isLast ? 'Finish and submit →' : 'Complete section →')+'</button>';
-  h += '<button class="btn btn-ghost" id="btn-fw">Framework</button>';
-  h += '<button class="btn btn-ghost" id="btn-notes-open">My Notes</button>';
   h += '<span class="tiny">Once you leave this section you cannot return to it.</span>';
   h += '</div>';
   return h;
@@ -1116,9 +1119,7 @@ function reviewHTML() {
     h += revBlk('Inference', d.inference);
     h += '<div class="review-blk"><div class="review-q">Score &amp; classification</div><div class="review-a'+(d.score?'':' empty')+'">'
       +  esc(d.score||'(blank)')+' — '+esc(d.classification||'(no classification)')+'</div></div>';
-    h += revBlk('Score justification', d.justification);
-    h += revBlk('Why this classification', d.why);
-    h += revBlk('Summary rationale', d.rationale);
+    h += revBlk('Why this score and classification', d.justification);
     h += '</div>';
   });
   h += '<div style="font-size:13px;font-weight:700;color:var(--blue1);margin-bottom:.625rem">Overall</div>';
@@ -1201,9 +1202,6 @@ function bind(sec) {
   on('btn-next','click', function(){
     showConfirm('Complete this section?', 'You will not be able to return to it.', function(){ advance(false); });
   });
-  on('btn-fw','click', function(){ $('fw-body').innerHTML = frameworkHTML(); $('fw-modal').classList.add('show'); });
-  on('btn-notes-open','click', function(){ $('notes-ta').value = S.notes; $('notes-modal').classList.add('show'); });
-
   if (sec.kind === 'comp') {
     const ci = sec.ci, d = S.comps[ci];
     d.obs.forEach(function(o, i){
@@ -1213,7 +1211,6 @@ function bind(sec) {
     });
     on('c-inference','input', function(e){ d.inference = e.target.value; debouncedSave(); });
     on('c-just','input', function(e){ d.justification = e.target.value; debouncedSave(); });
-    on('c-why','input', function(e){ d.why = e.target.value; debouncedSave(); });
     on('c-class','change', function(e){ d.classification = e.target.value; save(); });
     document.querySelectorAll('input[name="score-'+ci+'"]').forEach(function(r){
       r.addEventListener('change', function(e){ d.score = e.target.value; save(); });
@@ -1226,9 +1223,6 @@ function bind(sec) {
   }
 
   if (sec.kind === 'summary') {
-    S.comps.forEach(function(d, i){
-      on('s-rat-'+i,'input', function(e){ d.rationale = e.target.value; debouncedSave(); });
-    });
     on('ov-class','change', function(e){ S.overall.ratingClass = e.target.value; save(); });
     document.querySelectorAll('input[name="overall-score"]').forEach(function(r){
       r.addEventListener('change', function(e){ S.overall.rating = e.target.value; save(); });
@@ -1350,6 +1344,7 @@ function updateTimerBar() {
   const bar = $('timerbar');
   if (!sec || sec.secs === 0 || !S.deadline) { bar.classList.remove('show'); return; }
   bar.classList.add('show');
+  $('tb-links').classList.toggle('show', sec.kind === 'comp' || sec.kind === 'summary' || sec.kind === 'overall');
   $('tb-sec').textContent = sec.title;
   const pos = TIMED.indexOf(sec) + 1;
   $('tb-step').textContent = 'Section ' + pos + ' of ' + TIMED.length;
@@ -1425,10 +1420,8 @@ function missing() {
     if (filled < 2) m.push(c.name + ': observations');
     if (!d.inference.trim()) m.push(c.name + ': inference');
     if (!d.score) m.push(c.name + ': score');
-    if (!d.justification.trim()) m.push(c.name + ': justification');
     if (!d.classification) m.push(c.name + ': classification');
-    if (!d.why.trim()) m.push(c.name + ': why');
-    if (!d.rationale.trim()) m.push(c.name + ': summary rationale');
+    if (!d.justification.trim()) m.push(c.name + ': why');
   });
   if (!S.overall.rating) m.push('Overall rating');
   if (!S.overall.ratingClass) m.push('Overall classification');
@@ -1474,9 +1467,8 @@ function sheetLines(completedAt) {
     L.push('');
     L.push('Inference: ' + (d.inference.trim() || '(blank)'));
     L.push('Score: ' + (d.score || '(blank)'));
-    L.push('Score justification: ' + (d.justification.trim() || '(blank)'));
     L.push('Classification: ' + (d.classification || '(blank)'));
-    L.push('Why: ' + (d.why.trim() || '(blank)'));
+    L.push('Why: ' + (d.justification.trim() || '(blank)'));
   });
 
   L.push('');
@@ -1484,8 +1476,7 @@ function sheetLines(completedAt) {
   L.push('SUMMARY — SCORES AND CLASSIFICATIONS ACROSS ALL COMPETENCIES');
   COMPETENCIES.forEach(function(c, i){
     const d = S.comps[i];
-    L.push(c.name + ' | Score: ' + (d.score || '(blank)') + ' | Classification: ' + (d.classification || '(blank)')
-      + ' | Rationale: ' + (d.rationale.trim() || '(blank)'));
+    L.push(c.name + ' | Score: ' + (d.score || '(blank)') + ' | Classification: ' + (d.classification || '(blank)'));
   });
   L.push('Overall Rating | Score: ' + (S.overall.rating || '(blank)') + ' | Classification: ' + (S.overall.ratingClass || '(blank)'));
 
@@ -1627,6 +1618,8 @@ window.addEventListener('load', positionTimerbarBelowBanner);
 positionTimerbarBelowBanner();
 
 /* ═══ BOOT ═══════════════════════════════════════════════════ */
+$('tb-btn-fw').addEventListener('click', function(){ $('fw-body').innerHTML = frameworkHTML(); $('fw-modal').classList.add('show'); });
+$('tb-btn-notes').addEventListener('click', function(){ $('notes-ta').value = S.notes; $('notes-modal').classList.add('show'); });
 $('fw-close').addEventListener('click', function(){ $('fw-modal').classList.remove('show'); });
 $('fw-modal').addEventListener('click', function(e){ if (e.target === $('fw-modal')) $('fw-modal').classList.remove('show'); });
 $('notes-close').addEventListener('click', function(){ $('notes-modal').classList.remove('show'); });
